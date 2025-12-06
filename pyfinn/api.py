@@ -1,35 +1,37 @@
 import json
-
-import redis
-import os
 from flask import Flask, request, jsonify
-
 from pyfinn import fetch_ad, scrape_ad
 
 app = Flask(__name__)
 
-redis_service = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-cache_duration = int(os.getenv("CACHE_DURATION_SECONDS", 23 * 60 * 60))
-
-
 @app.route("/", methods=["GET"])
 def ad_detail():
     finnkode = request.args.get("finnkode")
+    
+    # Sjekk om finnkode mangler
     if not finnkode or not finnkode.isdigit():
-        return jsonify(**{"error": "Missing or invalid param finnkode. Try /?finnkode=KODE"})
+        return jsonify({"error": "Missing or invalid param finnkode. Try /?finnkode=KODE"}), 400
 
-    cache_key = f"finn-ad-v2:{finnkode}"
-    ad = redis_service.get(cache_key)
-    if not ad:
+    try:
+        # 1. Bygg URL
         url = f"https://www.finn.no/realestate/homes/ad.html?finnkode={finnkode}"
+        
+        # 2. Hent HTML fra Finn
         html = fetch_ad(url)
-        ad = scrape_ad(html)
-        redis_service.set(cache_key, json.dumps({"url": url} | ad), cache_duration)
-    else:
-        ad = json.loads(ad)
+        
+        # 3. Skrap data fra HTMLen
+        ad_data = scrape_ad(html)
+        
+        # 4. Legg til URL i resultatet for referanse
+        if isinstance(ad_data, dict):
+            ad_data['url'] = url
+            
+        # 5. Returner data som JSON
+        return jsonify(ad_data)
 
-    return jsonify(ad=ad)
-
+    except Exception as e:
+        # Hvis noe går galt (f.eks. Finn endrer kode), gi beskjed
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
